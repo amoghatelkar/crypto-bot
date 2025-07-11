@@ -1,5 +1,5 @@
 require('dotenv').config();
-const fetch = require('node-fetch');
+const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
 const sendTelegram = async (msg) => {
   const token = process.env.TELEGRAM_BOT_TOKEN;
