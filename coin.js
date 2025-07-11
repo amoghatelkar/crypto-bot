@@ -1,0 +1,50 @@
+const BIN_PAIR = {
+  'BTC-INR': 'BTCUSDT',
+  'ETH-INR': 'ETHUSDT',
+  'DOGE-INR': 'DOGEUSDT',
+  'MATIC-INR': 'MATICUSDT',
+  'BCH-INR': 'BCHUSDT',
+  'LTC-INR': 'LTCUSDT',
+  'XRP-INR': 'XRPUSDT',
+  'TRX-INR': 'TRXUSDT',
+  'LINK-INR': 'LINKUSDT',
+  'SHIB-INR': 'SHIBUSDT',
+  'SOL-INR': 'SOLUSDT',
+  'ADA-INR': 'ADAUSDT',
+  'AVAX-INR': 'AVAXUSDT',
+  'UNI-INR': 'UNIUSDT',
+  'XLM-INR': 'XLMUSDT',
+  'ATOM-INR': 'ATOMUSDT',
+  'NEAR-INR': 'NEARUSDT',
+  'DOT-INR': 'DOTUSDT',
+  'HBAR-INR': 'HBARUSDT',
+  'GRT-INR': 'GRTUSDT',
+};
+const AMOUNT = {
+  'BTC-INR': 0.0001,
+  'ETH-INR': 0.001,
+  'DOGE-INR': 10,
+  'MATIC-INR': 1,
+  'BCH-INR': 0.01,
+  'LTC-INR': 0.01,
+  'XRP-INR': 5,
+  'TRX-INR': 10,
+  'LINK-INR': 0.1,
+  'SHIB-INR': 1000,
+  'SOL-INR': 0.01,
+  'ADA-INR': 1,
+  'AVAX-INR': 0.05,
+  'UNI-INR': 0.05,
+  'XLM-INR': 5,
+  'ATOM-INR': 0.05,
+  'NEAR-INR': 0.1,
+  'DOT-INR': 0.1,
+  'HBAR-INR': 20,
+  'GRT-INR': 10,
+};
+
+// config.js
+module.exports = {
+  BIN_PAIR,
+  AMOUNT
+};

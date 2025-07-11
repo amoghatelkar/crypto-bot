@@ -4,6 +4,7 @@ const axios  = require('axios');
 const crypto = require('crypto');
 const ti     = require('technicalindicators');
 const { sendTelegram } = require('./telegram');
+const { BIN_PAIR, AMOUNT } = require('./config');
 
 /*── strategy params (from .env or defaults) ──*/
 const SHORT = +process.env.SHORT_PERIOD || 5;
@@ -12,8 +13,8 @@ const INTERVAL = (+process.env.INTERVAL || 30) * 1000;
 const RSI_PERIOD = 14;
 
 /*── where we fetch candles (Binance) and trade (ZebPay) ──*/
-const BIN_PAIR = { 'BTC-INR':'BTCUSDT', 'ETH-INR':'ETHUSDT', 'DOGE-INR':'DOGEUSDT' };
-const AMOUNT   = { 'BTC-INR':0.0001, 'ETH-INR':0.001, 'DOGE-INR':10 };
+// const BIN_PAIR = { 'BTC-INR':'BTCUSDT', 'ETH-INR':'ETHUSDT', 'DOGE-INR':'DOGEUSDT' };
+// const AMOUNT   = { 'BTC-INR':0.0001, 'ETH-INR':0.001, 'DOGE-INR':10 };
 
 const Z_API   = 'https://www.zebapi.com/pro/v2';
 const Z_KEY   = process.env.ZEBPAY_API_KEY;
