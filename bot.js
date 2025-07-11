@@ -4,7 +4,7 @@ const axios  = require('axios');
 const crypto = require('crypto');
 const ti     = require('technicalindicators');
 const { sendTelegram } = require('./telegram');
-const { BIN_PAIR, AMOUNT } = require('./config');
+const { BIN_PAIR, AMOUNT } = require('./coin');
 
 /*── strategy params (from .env or defaults) ──*/
 const SHORT = +process.env.SHORT_PERIOD || 5;
