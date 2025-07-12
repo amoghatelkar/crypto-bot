@@ -19,10 +19,16 @@ EOF
 nohup node .serveLogs.js >/dev/null 2>&1 &
 
 # 2) Start ngrok (http 3000) in background and capture URL
-nohup ngrok http 3000 --log=stdout > .ngrok.log 2>&1 &
+nohup ngrok http 3000 > /dev/null 2>&1 &
 echo "Waiting for ngrok..."
 sleep 3
-URL=$(grep -oE "https://[0-9a-zA-Z.-]+\.ngrok.io" .ngrok.log | head -n1)
+
+# Poll the ngrok API up to 10 times (wait for tunnel to be ready)
+for i in {1..10}; do
+  URL=$(curl -s http://127.0.0.1:4040/api/tunnels | grep -oE 'https://[a-zA-Z0-9.-]+\.ngrok.io' | head -n1)
+  [ -n "$URL" ] && break
+  sleep 1
+done
 
 # 3) Send Telegram message with the fresh URL
 if [ -n "$URL" ]; then
