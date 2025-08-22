@@ -1,12 +1,11 @@
 /**
  * Binance-feed + ZebPay-trade hybrid bot
- * Strategy: SMA crossover + RSI filter  (multi-pair)
- * -----------------------------------------------
- *  • Checks INR balance before BUY
- *  • Checks coin balance before SELL
- *  • Converts Binance USDT prices → INR with USDT_INR
- *  • Skips (but logs) Binance 404 errors
- *  • Prints INR wallet once per loop (BTC-INR branch)
+ * Strategy: SMA crossover + RSI filter (multi-pair)
+ * ---------------------------------------------------
+ * • Monitors Binance prices (in USDT), converts to INR
+ * • Uses SMA and RSI to decide BUY / SELL
+ * • Trades on ZebPay (INR market) using your balance
+ * • Logs important steps, sends alerts via Telegram
  */
 require('dotenv').config();
 const axios   = require('axios');
@@ -15,155 +14,168 @@ const ti      = require('technicalindicators');
 const { sendTelegram }     = require('./telegram');
 const { BIN_PAIR, AMOUNT } = require('./coin');
 
-/*── strategy params ────────────────────────────────────────────────*/
+// Strategy settings
 const SHORT      = +process.env.SHORT_PERIOD || 5;
 const LONG       = +process.env.LONG_PERIOD  || 10;
-const INTERVAL   = (+process.env.INTERVAL    || 30) * 1000;
+const INTERVAL   = (+process.env.INTERVAL    || 30) * 1000; // in ms
 const RSI_PERIOD = 14;
-const USDT_INR   = +process.env.USDT_INR || 85;  // override in .env if needed
-const MAX_SPEND  = +process.env.MAX_SPEND || 5_000; // ₹ cap per BUY
+const USDT_INR   = +process.env.USDT_INR || 85;
+const MAX_SPEND  = +process.env.MAX_SPEND || 5000; // Max INR per trade
 
-/*── ZebPay auth ───────────────────────────────────────────────────*/
-const Z_API    = 'https://www.zebapi.com/pro/v2';
+// ZebPay API Auth
+const Z_API    = 'https://www.zebapi.com/api/v1';
 const Z_KEY    = process.env.ZEBPAY_API_KEY;
 const Z_SECRET = process.env.ZEBPAY_API_SECRET;
-function zbSign(path, body='') {
-  const nonce = Date.now().toString();
-  const sig   = crypto.createHmac('sha256', Z_SECRET)
-                      .update(nonce + path + body).digest('hex');
-  return { nonce, sig };
+
+function signPayload(payload) {
+  const payloadStr = JSON.stringify(payload);
+  const signature = crypto.createHmac('sha256', Z_SECRET).update(payloadStr).digest('hex');
+  return { signature, payloadStr };
 }
-async function zbPriv(method, path, obj={}) {
-  const body = JSON.stringify(obj);
-  const { nonce, sig } = zbSign(path, body);
+
+async function placeOrder(orderData) {
+  const timestamp = Date.now();
+  const fullPayload = { ...orderData, timestamp };
+  const { signature, payloadStr } = signPayload(fullPayload);
+
   return (await axios({
-    url: Z_API + path,
-    method,
+    url: `${Z_API}/orders`,
+    method: 'POST',
     headers: {
-      'Content-Type'  : 'application/json',
-      'X-ZB-APIKEY'   : Z_KEY,
-      'X-ZB-NONCE'    : nonce,
-      'X-ZB-SIGNATURE': sig
+      'X-AUTH-APIKEY': Z_KEY,
+      'X-AUTH-SIGNATURE': signature,
+      'Content-Type': 'application/json'
     },
-    data: body
+    data: payloadStr
   })).data;
 }
-/*── helpers ───────────────────────────────────────────────────────*/
-async function getBalance(asset) {
-  const b = await zbPriv('GET', '/user/balances');
-  return parseFloat(b?.[asset]?.available || 0);
-}
-/* track last side to avoid duplicate orders */
-const lastSide = {};
 
-/*── wrapped trade helpers ──────────────────────────────────*/
+async function getBalance(asset) {
+  const timestamp = Date.now();
+  const queryStr = `timestamp=${timestamp}`;
+  const signature = crypto.createHmac('sha256', Z_SECRET).update(queryStr).digest('hex');
+
+  const response = await axios({
+    url: `${Z_API}/wallet/balance?${queryStr}`,
+    method: 'GET',
+    headers: {
+      'X-AUTH-APIKEY': Z_KEY,
+      'X-AUTH-SIGNATURE': signature
+    }
+  });
+
+  return parseFloat(response.data?.data?.[asset]?.available || 0);
+}
+
+const lastSide = {}; // Remember last action to prevent duplicates
+
 async function executeBuy(pair, qty, priceINR, rsi) {
-  await sendTelegram(`🤖 ${pair} BUY @ ₹${priceINR} (RSI ${rsi.toFixed(1)})`);
-  console.log(`Inside executeBuy: pair=${pair}, qty=${qty}, priceINR=${priceINR}, rsi=${rsi}`);
+  console.log(`\n🟢 [BUY] Attempting ${pair} @ ₹${priceINR} | RSI ${rsi.toFixed(1)}`);
+  await sendTelegram(`🟢 [BUY] ${pair} @ ₹${priceINR} (RSI ${rsi.toFixed(1)})`);
   try {
-    await zbPriv('POST', '/user/orders', {
-      currencyPair: pair,
-      type: 'market',
-      side: 'buy',
-      quantity: qty,
+    await placeOrder({
+      trade_pair: pair,
+      side: 'bid',
+      size: qty,
+      price: parseFloat(priceINR),
+      tradeType: 1,
+      platform: 'API_Trading'
     });
-    await sendTelegram(`✅ BUY ${pair} @ ₹${priceINR} (RSI ${rsi.toFixed(1)})`);
     lastSide[pair] = 'buy';
+    console.log(`✅ [SUCCESS] Bought ${pair}`);
+    await sendTelegram(`✅ [SUCCESS] Bought ${pair}`);
   } catch (e) {
-    console.error(`[${pair}] BUY error: ${e.message}`);
-    await sendTelegram(`⚠️ BUY ${pair} failed: ${e.message.slice(0,120)}`);
+    console.error(`❌ [BUY ERROR] ${e.message}`);
+    await sendTelegram(`❌ [BUY ERROR] ${pair}: ${e.message.slice(0, 120)}`);
   }
 }
 
 async function executeSell(pair, qty, priceINR, rsi) {
-  await sendTelegram(`🤖 ${pair} SELL @ ₹${priceINR} (RSI ${rsi.toFixed(1)})`);
-  console.log(`Inside executeSell: pair=${pair}, qty=${qty}, priceINR=${priceINR}, rsi=${rsi}`);
+  console.log(`\n🔴 [SELL] Attempting ${pair} @ ₹${priceINR} | RSI ${rsi.toFixed(1)}`);
+  await sendTelegram(`🔴 [SELL] ${pair} @ ₹${priceINR} (RSI ${rsi.toFixed(1)})`);
   try {
-    await zbPriv('POST', '/user/orders', {
-      currencyPair: pair,
-      type: 'market',
-      side: 'sell',
-      quantity: qty,
+    await placeOrder({
+      trade_pair: pair,
+      side: 'ask',
+      size: qty,
+      price: parseFloat(priceINR),
+      tradeType: 1,
+      platform: 'API_Trading'
     });
-    await sendTelegram(`❌ SELL ${pair} @ ₹${priceINR} (RSI ${rsi.toFixed(1)})`);
     lastSide[pair] = 'sell';
+    console.log(`✅ [SUCCESS] Sold ${pair}`);
+    await sendTelegram(`✅ [SUCCESS] Sold ${pair}`);
   } catch (e) {
-    console.error(`[${pair}] SELL error: ${e.message}`);
-    await sendTelegram(`⚠️ SELL ${pair} failed: ${e.message.slice(0,120)}`);
+    console.error(`❌ [SELL ERROR] ${e.message}`);
+    await sendTelegram(`❌ [SELL ERROR] ${pair}: ${e.message.slice(0, 120)}`);
   }
 }
 
-/*──────────────── main worker ─────────────────────────────────────*/
 async function trade(pair) {
   try {
-    /* 1️⃣ fetch Binance candles */
-    const lim  = Math.max(LONG, RSI_PERIOD) + 5;
-    const url  = `https://api.binance.com/api/v3/klines?symbol=${BIN_PAIR[pair]}&interval=1m&limit=${lim}`;
+    const lim = Math.max(LONG, RSI_PERIOD) + 5;
+    const url = `https://api.binance.com/api/v3/klines?symbol=${BIN_PAIR[pair]}&interval=1m&limit=${lim}`;
     let rows;
-    try { rows = (await axios.get(url)).data; }
-    catch (e) {
+    try {
+      rows = (await axios.get(url)).data;
+    } catch (e) {
       if (e.response?.status === 404) {
-        console.log(`[${pair}] Binance 404 – skipping this round`);
+        console.log(`⚠️ [${pair}] Binance 404 – Skipping`);
         return;
       }
       throw e;
     }
     const closes = rows.map(r => +r[4]);
-
     const smaS = ti.SMA.calculate({ period: SHORT, values: closes }).pop();
     const smaL = ti.SMA.calculate({ period: LONG , values: closes }).pop();
     const rsi  = ti.RSI.calculate({ period: RSI_PERIOD, values: closes }).pop();
     const lastPriceUSDT = closes.at(-1);
     const priceINR = (lastPriceUSDT * USDT_INR).toFixed(2);
 
-    /* log headline + INR wallet once per loop */
     if (pair === 'BTC-INR') {
       const inrBal = await getBalance('INR');
-      console.log(`💰 INR balance: ₹${inrBal.toFixed(0)}`);
+      console.log(`\n💼 INR Balance: ₹${inrBal.toFixed(0)}`);
     }
-    console.log(`[${pair}] SMA${SHORT}:${smaS?.toFixed(2)} SMA${LONG}:${smaL?.toFixed(2)} RSI:${rsi?.toFixed(1)}`);
+
+    console.log(`[${pair}] SMA(${SHORT}): ${smaS?.toFixed(2)}, SMA(${LONG}): ${smaL?.toFixed(2)}, RSI: ${rsi?.toFixed(1)}`);
 
     if (!smaS || !smaL || !rsi) return;
 
-    /* 2️⃣ BUY block */
+    // BUY
     if (smaS >= smaL && rsi < 90 && lastSide[pair] !== 'buy') {
-
       const inrAvail = await getBalance('INR');
-      const estCost  = AMOUNT[pair] * lastPriceUSDT * USDT_INR;
+      const estCost = AMOUNT[pair] * lastPriceUSDT * USDT_INR;
 
       if (inrAvail < estCost) {
-        console.log(`[${pair}] SKIP BUY – need ₹${estCost.toFixed(0)}, have ₹${inrAvail.toFixed(0)}`);
+        console.log(`⚠️ [${pair}] Not enough INR – Need ₹${estCost.toFixed(0)}, Have ₹${inrAvail.toFixed(0)}`);
         return;
       }
       if (estCost > MAX_SPEND) {
-        console.log(`[${pair}] SKIP BUY – cost ₹${estCost.toFixed(0)} > cap ₹${MAX_SPEND}`);
+        console.log(`⚠️ [${pair}] Skip BUY – Exceeds max cap ₹${MAX_SPEND}`);
         return;
       }
-
       await executeBuy(pair, AMOUNT[pair], priceINR, rsi);
     }
 
-    /* 3️⃣ SELL block */
+    // SELL
     if (smaS <= smaL && rsi > 75 && lastSide[pair] !== 'sell') {
-
-      const token   = pair.split('-')[0];     // e.g. BTC
+      const token = pair.split('-')[0];
       const balance = await getBalance(token);
       if (balance < AMOUNT[pair]) {
-        console.log(`[${pair}] SKIP SELL – have ${balance}, need ${AMOUNT[pair]}`);
+        console.log(`⚠️ [${pair}] Not enough ${token} – Have ${balance}, Need ${AMOUNT[pair]}`);
         return;
       }
       await executeSell(pair, AMOUNT[pair], priceINR, rsi);
     }
 
   } catch (err) {
-    console.error(`[${pair}] ERROR: ${err.message}`);
+    console.error(`🚨 [${pair}] Unexpected Error: ${err.message}`);
     if (!err.message.includes('404')) {
-      await sendTelegram(`⚠️ ${pair} error: ${err.message.slice(0,120)}`);
+      await sendTelegram(`🚨 [${pair}] Error: ${err.message.slice(0, 120)}`);
     }
   }
 }
 
-/*── scheduler ──────────────────────────────────────────────────────*/
 const PAIRS = Object.keys(BIN_PAIR);
-console.log(`🤖 Hybrid bot running ${PAIRS.join(', ')} every ${(INTERVAL/1000)}s`);
+console.log(`\n🤖 Hybrid Trading Bot Started\nWatching: ${PAIRS.join(', ')}\nInterval: ${INTERVAL/1000}s\n`);
 setInterval(() => PAIRS.forEach(trade), INTERVAL);
